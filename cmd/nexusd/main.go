@@ -38,6 +38,13 @@ import (
 type Config struct {
 	// ListenAddr is the HTTP bind address (default ":8080").
 	ListenAddr string `yaml:"listen_addr"`
+	// FeishuAppID / FeishuAppSecret are the bot credentials for egress
+	// replies (im.message.create). Loaded from config; in production
+	// prefer env/secret-store injection.
+	FeishuAppID     string `yaml:"feishu_app_id"`
+	FeishuAppSecret string `yaml:"feishu_app_secret"`
+	// ReplyOnRoute sends an ack back to the chat when a mention is routed.
+	ReplyOnRoute bool `yaml:"reply_on_route"`
 	// Bots maps Feishu bot open_ids to agent LU names.
 	Bots map[string]string `yaml:"bots"`
 	// Layers maps chat_id → governance layer (L0..L3).
@@ -138,6 +145,7 @@ type BridgeSender interface {
 type server struct {
 	policy  *feishu.Policy
 	bridge  BridgeSender
+	reply   *feishu.Sender // optional egress (nil = no replies)
 	layerOf func(chatID string) string
 	log     *log.Logger
 }
@@ -180,11 +188,28 @@ func (s *server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			s.log.Printf("bridge error: %s: %v", targetLU, err)
 		} else {
 			s.log.Printf("routed ok: %s -> task %s", targetLU, id)
+			s.ackToChat(ctx, evt, targetLU, id)
 		}
 	}
 
 	// Feishu expects a prompt 200 ack.
 	w.WriteHeader(http.StatusOK)
+}
+
+// ackToChat sends a routed confirmation back to the source chat when
+// egress is configured (reply_on_route). Failures are logged, never
+// fatal — the ingress ack is independent of egress delivery.
+func (s *server) ackToChat(ctx context.Context, evt *feishu.Event, targetLU, taskID string) {
+	if s.reply == nil {
+		return
+	}
+	msg := feishu.Message{
+		ChatID: evt.ChatID,
+		Text:   fmt.Sprintf("已路由给 %s（task %s）", targetLU, taskID),
+	}
+	if _, err := s.reply.Send(ctx, msg); err != nil {
+		s.log.Printf("egress reply failed: %v", err)
+	}
 }
 
 func truncate(s string, n int) string {
@@ -206,7 +231,11 @@ func main() {
 	_, policy, router, layerOf := buildWiring(cfg)
 
 	b := bridge.New(router)
-	srv := &server{policy: policy, bridge: b, layerOf: layerOf, log: log.Default()}
+	var reply *feishu.Sender
+	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
+		reply = feishu.NewSender(cfg.FeishuAppID, cfg.FeishuAppSecret, "")
+	}
+	srv := &server{policy: policy, bridge: b, reply: reply, layerOf: layerOf, log: log.Default()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/feishu/webhook", srv.handleWebhook)

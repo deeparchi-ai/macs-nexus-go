@@ -6,6 +6,12 @@
 
 listen_addr: ":8080"
 
+# Egress replies: bot credentials + ack on routed mentions.
+# Leave empty to disable egress (log-only mode).
+feishu_app_id: ""
+feishu_app_secret: ""
+reply_on_route: true
+
 # Feishu bot open_ids → agent LU names (1:1, no fuzzy match).
 bots:
   ou_c9dcad554a528c1f9192b16db47033a0: hermes-home   # Hermes at home

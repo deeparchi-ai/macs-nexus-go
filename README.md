@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.5 — 43 tests (vtam 16 + feishu 16 + bridge 7 + nexusd 4)
+**Status:** v0.6 — 47 tests (vtam 16 + feishu 20 + bridge 7 + nexusd 4)
 
 ## What
 
@@ -84,6 +84,11 @@ go run ./cmd/nexusd -config cmd/nexusd/config.example.yaml
 # POST /feishu/webhook  (Feishu event subscription callback)
 # GET  /healthz
 ```
+
+With `feishu_app_id` / `feishu_app_secret` configured and `reply_on_route:
+true`, the service also sends a routed confirmation back to the source chat
+via `pkg/feishu.Sender` (tenant token → im.message.create). Live-verified
+2026-08-03: webhook → policy → A2A → Feishu reply round-trip.
 
 ## License
 
