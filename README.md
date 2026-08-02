@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.2 — 21 tests (vtam 16 + feishu 5)
+**Status:** v0.3 — 32 tests (vtam 16 + feishu 16)
 
 ## What
 
