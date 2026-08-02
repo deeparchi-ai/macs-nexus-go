@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.1 — 16 tests
+**Status:** v0.2 — 21 tests (vtam 16 + feishu 5)
 
 ## What
 
@@ -33,6 +33,26 @@ r.AddRule(vtam.AdmissionRule{
     AllowedMethods: []string{"tasks/send"},
 })
 decision := r.CheckAdmission("source", "research-agent", "tasks/send")
+```
+
+## Feishu adapter
+
+The `pkg/feishu` package implements the Feishu transport: event
+normalization, @mention → LU resolution, and the L0–L3 policy gate at the
+message boundary. Design spec: `macs/specs/nexus-feishu-adapter.md`.
+
+```go
+import "github.com/deeparchi-ai/macs-vtam-go/pkg/feishu"
+
+reg := feishu.NewRegistry()
+reg.RegisterBot("ou_deep_001", "cm-deepsight")
+
+// Policy encodes the governance matrix (layer resolution + permissions)
+p := feishu.NewPolicy(reg, layerOf, perm)
+allowed, reason := p.Allowed("cm-deepsight", "oc_l0_all", isMention=true)
+
+// Resolve @mentions in raw Feishu text to agent LU names
+lus := p.ResolveMentions(`<at user_id="ou_deep_001">ds</at> 帮我查一下`)
 ```
 
 ## License
