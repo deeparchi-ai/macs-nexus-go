@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.3 — 32 tests (vtam 16 + feishu 16)
+**Status:** v0.4 — 39 tests (vtam 16 + feishu 16 + bridge 7)
 
 ## What
 
@@ -55,6 +55,22 @@ allowed, reason := p.Allowed("cm-deepsight", "oc_l0_all", isMention=true)
 lus := p.ResolveMentions(`<at user_id="ou_deep_001">ds</at> 帮我查一下`)
 ```
 
+## A2A bridge
+
+The `pkg/bridge` package routes Feishu events to remote agents over the
+A2A protocol. It resolves the target agent's best transport via the Nexus
+router, then sends the event text as an A2A message (thread id → context id
+for multi-turn continuity). Depends on `a2a-go/v2`; feishu and vtam stay
+dependency-free.
+
+```go
+import "github.com/deeparchi-ai/macs-vtam-go/pkg/bridge"
+
+b := bridge.New(router)
+taskID, err := b.Send(ctx, evt, "cm-deepsight")
+```
+
 ## License
 
-Apache 2.0 — zero dependencies (stdlib only).
+Apache 2.0 — vtam/feishu are zero-dependency (stdlib only); bridge depends
+on a2a-go/v2.
