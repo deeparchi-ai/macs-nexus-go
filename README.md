@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.4 — 39 tests (vtam 16 + feishu 16 + bridge 7)
+**Status:** v0.5 — 43 tests (vtam 16 + feishu 16 + bridge 7 + nexusd 4)
 
 ## What
 
@@ -68,6 +68,21 @@ import "github.com/deeparchi-ai/macs-vtam-go/pkg/bridge"
 
 b := bridge.New(router)
 taskID, err := b.Send(ctx, evt, "cm-deepsight")
+```
+
+## nexusd — Feishu-native MACS deployment skeleton
+
+`cmd/nexusd` assembles the Nexus packages into a runnable service: a Feishu
+webhook endpoint that normalizes events, applies the L0–L3 policy gate, and
+routes @mentions to target agents via A2A. All deployment-specific wiring
+(bot registry, chat layers, permission matrix, agent endpoints) lives in
+`config.yaml` — the core packages are untouched. This is the "Feishu version
+of QM" control plane.
+
+```bash
+go run ./cmd/nexusd -config cmd/nexusd/config.example.yaml
+# POST /feishu/webhook  (Feishu event subscription callback)
+# GET  /healthz
 ```
 
 ## License

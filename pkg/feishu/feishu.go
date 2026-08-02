@@ -176,6 +176,11 @@ func (p *Policy) Allowed(lu, chatID string, isMention bool) (bool, string) {
 	}
 }
 
+// Registry returns the identity registry backing the policy.
+func (p *Policy) Registry() *Registry {
+	return p.registry
+}
+
 // ResolveMentions converts raw mention open_ids to agent LU names using the
 // registry. Unknown ids (humans, other bots) are dropped.
 func (p *Policy) ResolveMentions(rawText string) []string {

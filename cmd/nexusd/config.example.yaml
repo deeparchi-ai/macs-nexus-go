@@ -1,0 +1,44 @@
+# nexusd deployment config — Feishu-native MACS control plane.
+#
+# Everything deployment-specific lives here; the Nexus core packages
+# (vtam/feishu/bridge) are not modified for a customer deployment.
+# This mirrors QM's "core unchanged, layer customized" deployment model.
+
+listen_addr: ":8080"
+
+# Feishu bot open_ids → agent LU names (1:1, no fuzzy match).
+bots:
+  ou_c9dcad554a528c1f9192b16db47033a0: hermes-home   # Hermes at home
+  ou_ae4cd929095734e3a69b0b366d09723c: sg-architect  # DeepArchi Chief Architect
+
+# chat_id → governance layer (L0..L3). Unlisted chats get default_layer.
+layers:
+  oc_b5bf2c874b2cefd1a419a16acf724235: L1   # QM 借鉴与落地 (team collaboration)
+  oc_23ccf094606f2cb2c4314bd8a55e02db: L0   # Deeparchi Agent工作群 (all)
+  oc_869bb5b83b6eaf732a6b69962b62512d: L2   # 杯光DTC品牌冷启动 (project)
+  oc_97233cd36c6cc94249362927c40329ec: L1   # DeepArchi × 三码 (team)
+
+default_layer: L3
+
+# Governance permission matrix: agent LU → layer → level.
+# Levels: allowed | mention_only | on_demand | owner | (absent = forbidden)
+permissions:
+  sg-architect:
+    L0: allowed
+    L1: allowed
+    L2: allowed
+    L3: on_demand
+  hermes-home:
+    L0: mention_only
+    L1: mention_only
+    L2: mention_only
+    L3: forbidden
+
+# Agent A2A endpoints for the bridge.
+endpoints:
+  - lu: hermes-home
+    transport: a2a-http
+    address: "http://localhost:10000/a2a"
+  - lu: sg-architect
+    transport: a2a-http
+    address: "http://localhost:10001/a2a"
