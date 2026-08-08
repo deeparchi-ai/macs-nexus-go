@@ -70,6 +70,22 @@ type EndpointConfig struct {
 	Address   string `yaml:"address"`
 }
 
+// parsePermission converts a config string to a Permission value.
+func parsePermission(level string) feishu.Permission {
+	switch level {
+	case "allowed":
+		return feishu.PermissionAllowed
+	case "mention_only":
+		return feishu.PermissionMentionOnly
+	case "on_demand":
+		return feishu.PermissionOnDemand
+	case "owner":
+		return feishu.PermissionOwner
+	default:
+		return feishu.PermissionForbidden
+	}
+}
+
 // loadConfig reads and validates the deployment config.
 func loadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -91,43 +107,42 @@ func loadConfig(path string) (*Config, error) {
 
 // buildWiring turns config into the Nexus wiring: registry, policy, router.
 // It returns the chat-layer resolver so the server can tag events.
+// v0.8: uses standardised LayerPolicy with built-in L0–L3 behaviours.
 func buildWiring(cfg *Config) (*feishu.Registry, *feishu.Policy, *vtam.Router, func(string) string) {
 	reg := feishu.NewRegistry()
 	for openID, lu := range cfg.Bots {
 		reg.RegisterBot(openID, lu)
 	}
 
-	layerOf := func(chatID string) string {
+	layerFunc := func(chatID string) feishu.Layer {
 		if l, ok := cfg.Layers[chatID]; ok {
-			return l
+			return feishu.Layer(l)
 		}
-		return cfg.DefaultLayer
+		if cfg.DefaultLayer != "" {
+			return feishu.Layer(cfg.DefaultLayer)
+		}
+		return feishu.LayerL3
 	}
 
-	perm := func(lu, layer string) feishu.Permission {
-		layerPerms, ok := cfg.Permissions[lu]
-		if !ok {
-			return feishu.PermissionForbidden
-		}
-		level, ok := layerPerms[layer]
-		if !ok {
-			return feishu.PermissionForbidden
-		}
-		switch level {
-		case "allowed":
-			return feishu.PermissionAllowed
-		case "mention_only":
-			return feishu.PermissionMentionOnly
-		case "on_demand":
-			return feishu.PermissionOnDemand
-		case "owner":
-			return feishu.PermissionOwner
-		default:
-			return feishu.PermissionForbidden
+	// Per-LU permission overrides from config.
+	luPerms := make(map[string]map[string]feishu.Permission)
+	for lu, layerPerms := range cfg.Permissions {
+		luPerms[lu] = make(map[string]feishu.Permission)
+		for layer, level := range layerPerms {
+			luPerms[lu][layer] = parsePermission(level)
 		}
 	}
 
-	policy := feishu.NewPolicy(reg, layerOf, perm)
+	policy := feishu.NewPolicy(reg,
+		func(chatID string) string { return string(layerFunc(chatID)) },
+		func(lu, layer string) feishu.Permission {
+			if perms, ok := luPerms[lu]; ok {
+				if perm, ok := perms[layer]; ok {
+					return perm
+				}
+			}
+			return feishu.PermissionForbidden
+		})
 
 	router := vtam.NewRouter()
 	for _, ep := range cfg.Endpoints {
@@ -138,7 +153,7 @@ func buildWiring(cfg *Config) (*feishu.Registry, *feishu.Policy, *vtam.Router, f
 		})
 	}
 
-	return reg, policy, router, layerOf
+	return reg, policy, router, func(chatID string) string { return string(layerFunc(chatID)) }
 }
 
 // BridgeSender is the outbound A2A interface used by the server.

@@ -155,25 +155,50 @@ func NewPolicy(registry *Registry, layerOf func(chatID string) string, perm func
 
 // Allowed checks whether agent LU may respond in a chat, and why.
 // isMention is true when the agent was explicitly @mentioned.
+//
+// Deprecated: use Check() for structured audit decisions.
 func (p *Policy) Allowed(lu, chatID string, isMention bool) (bool, string) {
+	d := p.Check(lu, chatID, isMention)
+	return d.Allowed, d.Reason
+}
+
+// Check evaluates whether an agent LU may respond in a chat, returning a
+// structured Decision suitable for audit logging.
+func (p *Policy) Check(lu, chatID string, isMention bool) Decision {
 	layer := p.layerOf(chatID)
 	perm := p.perm(lu, layer)
 
+	d := Decision{
+		Layer:      Layer(layer),
+		LU:         lu,
+		Permission: perm,
+		IsMention:  isMention,
+	}
+
 	switch perm {
 	case PermissionAllowed, PermissionOwner:
-		return true, "allowed"
+		d.Allowed = true
+		d.Reason = "allowed"
 	case PermissionMentionOnly:
 		if isMention {
-			return true, "mentioned"
+			d.Allowed = true
+			d.Reason = "mentioned"
+		} else {
+			d.Allowed = false
+			d.Reason = "mention_only: not mentioned"
 		}
-		return false, "mention_only: not mentioned"
 	case PermissionOnDemand:
-		return false, "on_demand: no explicit grant"
+		d.Allowed = false
+		d.Reason = "on_demand: no explicit grant"
 	case PermissionForbidden:
-		return false, "forbidden in layer " + layer
+		d.Allowed = false
+		d.Reason = "forbidden in layer " + layer
 	default:
-		return false, "unknown permission"
+		d.Allowed = false
+		d.Reason = "unknown permission"
 	}
+
+	return d
 }
 
 // Registry returns the identity registry backing the policy.

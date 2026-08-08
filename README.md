@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.7 — 74 tests (vtam 16 + feishu 39 + bridge 11 + nexusd 8)
+**Status:** v0.8 — 120 tests (vtam 16 + feishu 50 + bridge 11 + nexusd 8, 35 sub-tests)
 
 ## What
 
@@ -89,6 +89,17 @@ With `feishu_app_id` / `feishu_app_secret` configured and `reply_on_route:
 true`, the service also sends a routed confirmation back to the source chat
 via `pkg/feishu.Sender` (tenant token → im.message.create).
 Live-verified 2026-08-03: webhook → policy → A2A → Feishu reply round-trip.
+
+## v0.8 Governance Layer Standardization
+
+See `docs/governance-layers-v0.8.md` for design. New in v0.8:
+
+- **Layer type** (`pkg/feishu/layer.go`) — L0–L3 as first-class types with standardised semantics
+- **LayerPolicy** — built-in default behaviours per layer with fail-closed matrix
+- **Decision audit** — `Check()` returns structured `Decision` with layer, permission, mention state for audit logging
+- **Backward compat** — `NewPolicy`/`Allowed` signature unchanged; `Policy` gains `Check()` method
+- **Table-driven tests** — 30-case matrix covering all 4 layers × mention × authorised
+- **Default behaviours**: L0=完全隔离, L1=白名单受限, L2=受限路由, L3=默认放行
 
 ## v0.7 Security Hardening
 
