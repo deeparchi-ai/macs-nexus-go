@@ -2,7 +2,7 @@
 
 MACS §8: Protocol admission control and multi-transport routing for agent networks.
 
-**Status:** v0.6 — 47 tests (vtam 16 + feishu 20 + bridge 7 + nexusd 4)
+**Status:** v0.7 — 74 tests (vtam 16 + feishu 39 + bridge 11 + nexusd 8)
 
 ## What
 
@@ -87,8 +87,17 @@ go run ./cmd/nexusd -config cmd/nexusd/config.example.yaml
 
 With `feishu_app_id` / `feishu_app_secret` configured and `reply_on_route:
 true`, the service also sends a routed confirmation back to the source chat
-via `pkg/feishu.Sender` (tenant token → im.message.create). Live-verified
-2026-08-03: webhook → policy → A2A → Feishu reply round-trip.
+via `pkg/feishu.Sender` (tenant token → im.message.create).
+Live-verified 2026-08-03: webhook → policy → A2A → Feishu reply round-trip.
+
+## v0.7 Security Hardening
+
+See `docs/security-hardening-v0.7.md` for design. New in v0.7:
+
+- **Feishu webhook HMAC signature verification** (`pkg/feishu/verify.go`) — X-Lark-Signature validation + 5-min replay window
+- **Tenant token concurrency hardening** (`pkg/feishu/sender.go`) — double-checked locking, exponential backoff retry
+- **Outbound idempotency** (`pkg/feishu/sender.go`) — random UUID per send to prevent duplicate messages
+- **Bridge input validation** (`pkg/bridge/bridge.go`) — empty target/text rejection, 128KB text truncation
 
 ## License
 

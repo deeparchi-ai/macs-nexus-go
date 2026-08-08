@@ -34,6 +34,17 @@ func TestToA2AMessage(t *testing.T) {
 	}
 }
 
+func TestToA2AMessage_Oversized(t *testing.T) {
+	// Build a text larger than maxTextLen (128KB).
+	bigText := strings.Repeat("x", maxTextLen+100)
+	evt := feishu.Event{Text: bigText}
+	msg := ToA2AMessage(evt, a2a.MessageRoleUser)
+	got := msg.Parts[0].Text()
+	if len(got) != maxTextLen {
+		t.Errorf("truncated text len = %d, want %d", len(got), maxTextLen)
+	}
+}
+
 func TestResultID_Message(t *testing.T) {
 	if got := ResultID(&a2a.Message{ID: "msg_1"}); got != "msg_1" {
 		t.Errorf("ResultID(message) = %q", got)
@@ -141,5 +152,35 @@ func TestBridge_Send_UnknownLU(t *testing.T) {
 	evt := feishu.Event{Text: "hello"}
 	if _, err := b.Send(context.Background(), evt, "no-such-agent"); err == nil {
 		t.Error("expected error for unknown LU")
+	}
+}
+
+func TestBridge_Send_EmptyTarget(t *testing.T) {
+	b := New(vtam.NewRouter())
+	evt := feishu.Event{Text: "hello"}
+	if _, err := b.Send(context.Background(), evt, ""); err == nil {
+		t.Error("expected error for empty target LU")
+	} else if !strings.Contains(err.Error(), "target LU name is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestBridge_Send_EmptyText(t *testing.T) {
+	b := New(vtam.NewRouter())
+	evt := feishu.Event{Text: ""}
+	if _, err := b.Send(context.Background(), evt, "some-agent"); err == nil {
+		t.Error("expected error for empty event text")
+	} else if !strings.Contains(err.Error(), "event text is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestBridge_Send_WhitespaceOnlyText(t *testing.T) {
+	b := New(vtam.NewRouter())
+	evt := feishu.Event{Text: "   "}
+	if _, err := b.Send(context.Background(), evt, "some-agent"); err == nil {
+		t.Error("expected error for whitespace-only text")
+	} else if !strings.Contains(err.Error(), "event text is required") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

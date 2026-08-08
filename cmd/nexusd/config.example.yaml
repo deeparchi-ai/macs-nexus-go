@@ -10,6 +10,10 @@ listen_addr: ":8080"
 # Leave empty to disable egress (log-only mode).
 feishu_app_id: ""
 feishu_app_secret: ""
+# feishu_signing_key is the "Verification Token" from Feishu app console
+# → Event Subscriptions. Required for webhook signature verification (v0.7+).
+# Leave empty for acceptance testing only.
+feishu_signing_key: ""
 reply_on_route: true
 
 # Feishu bot open_ids → agent LU names (1:1, no fuzzy match).

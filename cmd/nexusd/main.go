@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -43,6 +44,11 @@ type Config struct {
 	// prefer env/secret-store injection.
 	FeishuAppID     string `yaml:"feishu_app_id"`
 	FeishuAppSecret string `yaml:"feishu_app_secret"`
+	// FeishuSigningKey is the "Verification Token" from the Feishu app
+	// console → Event Subscriptions. Used for HMAC-SHA256 signature
+	// verification on inbound webhooks (v0.7+). Leave empty to skip
+	// verification (acceptance testing only).
+	FeishuSigningKey string `yaml:"feishu_signing_key"`
 	// ReplyOnRoute sends an ack back to the chat when a mention is routed.
 	ReplyOnRoute bool `yaml:"reply_on_route"`
 	// Bots maps Feishu bot open_ids to agent LU names.
@@ -143,20 +149,44 @@ type BridgeSender interface {
 
 // server wires the Nexus pipeline behind an HTTP handler.
 type server struct {
-	policy  *feishu.Policy
-	bridge  BridgeSender
-	reply   *feishu.Sender // optional egress (nil = no replies)
-	layerOf func(chatID string) string
-	log     *log.Logger
+	policy     *feishu.Policy
+	bridge     BridgeSender
+	reply      *feishu.Sender // optional egress (nil = no replies)
+	layerOf    func(chatID string) string
+	signingKey string
+	log        *log.Logger
 }
 
-// handleWebhook is the Feishu event-subscription callback. It runs the
-// full ingress pipeline: parse → resolve → policy gate → A2A route.
+// handleWebhook is the Feishu event-subscription callback. It verifies the
+// request signature (HMAC-SHA256 + replay protection), handles URL challenge,
+// then runs the full ingress pipeline: parse → resolve → policy gate → A2A route.
 func (s *server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
+	}
+
+	// URL challenge: respond with the challenge value.
+	if feishu.IsURLChallenge(body) {
+		var ch feishu.URLChallenge
+		if err := json.Unmarshal(body, &ch); err == nil && ch.Challenge != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(feishu.ChallengeResponse(ch.Challenge)))
+			return
+		}
+	}
+
+	// Signature verification (v0.7).
+	if s.signingKey != "" {
+		timestamp := r.Header.Get("X-Lark-Request-Timestamp")
+		nonce := r.Header.Get("X-Lark-Request-Nonce")
+		signature := r.Header.Get("X-Lark-Signature")
+		if err := feishu.VerifySignature(timestamp, nonce, signature, s.signingKey); err != nil {
+			s.log.Printf("signature verification failed: %v", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	evt, err := feishu.ParseWebhook(body)
@@ -235,7 +265,14 @@ func main() {
 	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
 		reply = feishu.NewSender(cfg.FeishuAppID, cfg.FeishuAppSecret, "")
 	}
-	srv := &server{policy: policy, bridge: b, reply: reply, layerOf: layerOf, log: log.Default()}
+	srv := &server{
+		policy:     policy,
+		bridge:     b,
+		reply:      reply,
+		layerOf:    layerOf,
+		signingKey: cfg.FeishuSigningKey,
+		log:        log.Default(),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/feishu/webhook", srv.handleWebhook)

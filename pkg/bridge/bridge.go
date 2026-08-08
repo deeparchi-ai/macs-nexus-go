@@ -10,12 +10,18 @@ package bridge
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/deeparchi-ai/macs-vtam-go/pkg/feishu"
 	"github.com/deeparchi-ai/macs-vtam-go/pkg/vtam"
 )
+
+// maxTextLen is the maximum allowed event text length (128KB). Messages
+// exceeding this are truncated to prevent memory exhaustion in downstream
+// agents.
+const maxTextLen = 128 * 1024
 
 // Bridge routes Feishu events to remote agents over A2A.
 type Bridge struct {
@@ -30,9 +36,14 @@ func New(router *vtam.Router) *Bridge {
 
 // ToA2AMessage converts a normalized Feishu event into an A2A message.
 // The Feishu thread id becomes the A2A context id so multi-turn
-// conversations keep their thread continuity.
+// conversations keep their thread continuity. Text is truncated to
+// maxTextLen if oversized.
 func ToA2AMessage(evt feishu.Event, role a2a.MessageRole) *a2a.Message {
-	msg := a2a.NewMessage(role, a2a.NewTextPart(evt.Text))
+	text := evt.Text
+	if len(text) > maxTextLen {
+		text = text[:maxTextLen]
+	}
+	msg := a2a.NewMessage(role, a2a.NewTextPart(text))
 	msg.ContextID = evt.ThreadID
 	return msg
 }
@@ -41,8 +52,21 @@ func ToA2AMessage(evt feishu.Event, role a2a.MessageRole) *a2a.Message {
 // It resolves the target LU through the router, builds a client from the
 // endpoint, and sends a user-role message carrying the Feishu thread
 // context. Returns the A2A message id on success.
+//
+// Input validation (v0.7): rejects empty target LU, empty event text, and
+// invalid adapter source names.
 func (b *Bridge) Send(ctx context.Context, evt feishu.Event, target vtam.LUName) (string, error) {
-	ep, reason, err := b.router.Route("feishu-adapter", target, nil)
+	// Input validation.
+	if target == "" {
+		return "", fmt.Errorf("bridge: target LU name is required")
+	}
+	if strings.TrimSpace(evt.Text) == "" {
+		return "", fmt.Errorf("bridge: event text is required")
+	}
+
+	const sourceAdapter = "feishu-adapter"
+
+	ep, reason, err := b.router.Route(vtam.LUName(sourceAdapter), target, nil)
 	if err != nil {
 		return "", fmt.Errorf("bridge: route %q: %w", target, err)
 	}

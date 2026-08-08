@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/deeparchi-ai/macs-vtam-go/pkg/feishu"
 	"github.com/deeparchi-ai/macs-vtam-go/pkg/vtam"
@@ -17,8 +22,9 @@ import (
 // sampleConfig mirrors config.example.yaml but with a test A2A endpoint.
 func sampleConfig() *Config {
 	return &Config{
-		ListenAddr:  ":0",
-		DefaultLayer: "L3",
+		ListenAddr:    ":0",
+		DefaultLayer:  "L3",
+		FeishuSigningKey: "test-signing-key-for-nexusd",
 		Bots: map[string]string{
 			"ou_sg_001": "sg-architect",
 			"ou_hermes": "hermes-home",
@@ -41,6 +47,13 @@ func sampleConfig() *Config {
 	}
 }
 
+// sampleConfigNoSigning returns a config without signing key (backward compat).
+func sampleConfigNoSigning() *Config {
+	cfg := sampleConfig()
+	cfg.FeishuSigningKey = ""
+	return cfg
+}
+
 // webhookPayload builds a Feishu im.message.receive_v1 payload.
 func webhookPayload(chatID, sender, text string) []byte {
 	content, _ := json.Marshal(map[string]string{"text": text})
@@ -54,7 +67,7 @@ func webhookPayload(chatID, sender, text string) []byte {
 		},
 		"event": map[string]any{
 			"sender": map[string]any{
-				"sender_id": map[string]any{"open_id": sender},
+				"sender_id":   map[string]any{"open_id": sender},
 				"sender_type": "user",
 			},
 			"message": map[string]any{
@@ -67,6 +80,17 @@ func webhookPayload(chatID, sender, text string) []byte {
 	}
 	raw, _ := json.Marshal(payload)
 	return raw
+}
+
+// feishuSignHeaders computes Feishu-compatible signature headers.
+func feishuSignHeaders(body []byte, signingKey string) (timestamp, nonce, signature string) {
+	ts := fmt.Sprintf("%d", time.Now().Unix())
+	nonce = fmt.Sprintf("nonce-%d", time.Now().UnixNano())
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	mac.Write([]byte(ts))
+	mac.Write([]byte(nonce))
+	signature = base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return ts, nonce, signature
 }
 
 func TestHandleWebhook_RoutesMention(t *testing.T) {
@@ -88,14 +112,13 @@ func TestHandleWebhook_RoutesMention(t *testing.T) {
 	}))
 	defer a2aSrv.Close()
 
-	cfg := sampleConfig()
+	cfg := sampleConfigNoSigning()
 	cfg.Endpoints = []EndpointConfig{
 		{LU: "sg-architect", Transport: "a2a-http", Address: a2aSrv.URL},
 	}
 
 	_, policy, router, layerOf := buildWiring(cfg)
-	b := newTestBridge(router)
-	srv := &server{policy: policy, bridge: b, layerOf: layerOf, log: testLogger()}
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: "", log: testLogger()}
 
 	// sg is ALLOWED in L1 → mention routes to the A2A endpoint.
 	body := webhookPayload("oc_l1_team", "ou_human_1",
@@ -113,10 +136,9 @@ func TestHandleWebhook_RoutesMention(t *testing.T) {
 }
 
 func TestHandleWebhook_DeniedByPolicy(t *testing.T) {
-	cfg := sampleConfig()
+	cfg := sampleConfigNoSigning()
 	_, policy, router, layerOf := buildWiring(cfg)
-	b := newTestBridge(router)
-	srv := &server{policy: policy, bridge: b, layerOf: layerOf, log: testLogger()}
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: "", log: testLogger()}
 
 	// hermes-home is FORBIDDEN in L3 (default) → mention must NOT route.
 	body := webhookPayload("oc_unlisted_chat", "ou_human_1",
@@ -131,9 +153,9 @@ func TestHandleWebhook_DeniedByPolicy(t *testing.T) {
 }
 
 func TestHandleWebhook_NonMessageEvent(t *testing.T) {
-	cfg := sampleConfig()
+	cfg := sampleConfigNoSigning()
 	_, policy, router, layerOf := buildWiring(cfg)
-	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, log: testLogger()}
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: "", log: testLogger()}
 
 	raw := `{"schema":"2.0","header":{"event_id":"e2","event_type":"im.message.chat_update_v1"}}`
 	req := httptest.NewRequest(http.MethodPost, "/feishu/webhook", strings.NewReader(raw))
@@ -146,9 +168,9 @@ func TestHandleWebhook_NonMessageEvent(t *testing.T) {
 }
 
 func TestHandleWebhook_NoMentions(t *testing.T) {
-	cfg := sampleConfig()
+	cfg := sampleConfigNoSigning()
 	_, policy, router, layerOf := buildWiring(cfg)
-	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, log: testLogger()}
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: "", log: testLogger()}
 
 	// Plain message with no @mention — nothing to route, still ack.
 	body := webhookPayload("oc_l0_all", "ou_human_1", "早上好")
@@ -158,6 +180,80 @@ func TestHandleWebhook_NoMentions(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("no-mention message should be ack'd 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebhook_SignatureValid(t *testing.T) {
+	cfg := sampleConfig() // has FeishuSigningKey
+	_, policy, router, layerOf := buildWiring(cfg)
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: cfg.FeishuSigningKey, log: testLogger()}
+
+	body := webhookPayload("oc_l0_all", "ou_human_1", "hello")
+	ts, nonce, sig := feishuSignHeaders(body, cfg.FeishuSigningKey)
+
+	req := httptest.NewRequest(http.MethodPost, "/feishu/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Lark-Request-Timestamp", ts)
+	req.Header.Set("X-Lark-Request-Nonce", nonce)
+	req.Header.Set("X-Lark-Signature", sig)
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid signature should be 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebhook_SignatureInvalid(t *testing.T) {
+	cfg := sampleConfig()
+	_, policy, router, layerOf := buildWiring(cfg)
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: cfg.FeishuSigningKey, log: testLogger()}
+
+	body := webhookPayload("oc_l0_all", "ou_human_1", "hello")
+	ts, nonce, _ := feishuSignHeaders(body, "wrong-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/feishu/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Lark-Request-Timestamp", ts)
+	req.Header.Set("X-Lark-Request-Nonce", nonce)
+	req.Header.Set("X-Lark-Signature", "ZmFrZS1zaWduYXR1cmU=") // forged
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid signature should be 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebhook_NoSigningKeySkipsVerification(t *testing.T) {
+	cfg := sampleConfigNoSigning()
+	_, policy, router, layerOf := buildWiring(cfg)
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: "", log: testLogger()}
+
+	body := webhookPayload("oc_l0_all", "ou_human_1", "hello")
+	req := httptest.NewRequest(http.MethodPost, "/feishu/webhook", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no signing key should skip verification and return 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebhook_URLChallenge(t *testing.T) {
+	cfg := sampleConfig()
+	_, policy, router, layerOf := buildWiring(cfg)
+	srv := &server{policy: policy, bridge: newTestBridge(router), layerOf: layerOf, signingKey: cfg.FeishuSigningKey, log: testLogger()}
+
+	challengeBody := `{"type":"url_verification","challenge":"abc123","token":"t-xyz"}`
+	req := httptest.NewRequest(http.MethodPost, "/feishu/webhook", strings.NewReader(challengeBody))
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("URL challenge should return 200, got %d", rec.Code)
+	}
+	resp, _ := io.ReadAll(rec.Body)
+	if !strings.Contains(string(resp), "abc123") {
+		t.Errorf("challenge response should contain challenge value: %s", string(resp))
 	}
 }
 

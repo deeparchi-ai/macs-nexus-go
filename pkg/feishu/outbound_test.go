@@ -27,6 +27,10 @@ func TestBuildMessage_Basic(t *testing.T) {
 	if !strings.Contains(req.Content, `\u003cat user_id=\"ou_deep_001\"\u003e`) {
 		t.Errorf("content missing mention (JSON-escaped form): %s", req.Content)
 	}
+	// UUID is not set by BuildMessage — it's set by Sender.Send.
+	if req.UUID != "" {
+		t.Logf("UUID set by BuildMessage: %s (expected empty, set by Sender)", req.UUID)
+	}
 }
 
 func TestBuildMessage_NoDoubleMention(t *testing.T) {
